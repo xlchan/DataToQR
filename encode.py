@@ -4,6 +4,7 @@ import string
 import subprocess
 import tempfile
 from logging import info
+from multiprocessing import freeze_support, Pool
 from typing import List, Optional
 
 import magic
@@ -13,12 +14,9 @@ from tqdm import tqdm
 
 from classes import File
 from constants import FIRST_DELIMITER, SECOND_DELIMITER
+from utils import abs_path
 
 mime = magic.Magic(mime=True)
-
-
-def p(*args: str) -> str:
-    return os.path.abspath(os.path.join(*args))
 
 
 class Data:
@@ -35,7 +33,7 @@ class Data:
         ])
     
     @staticmethod
-    def get_b64_data(
+    def get_data_from_text(
             path: str,
             file_encoding: str = "utf-8",
             *_, **__
@@ -116,12 +114,10 @@ class Data:
         
         # Iterate through all files and folders in folder
         for _file in os.listdir(folder_path):  # type: str
-            # Get absolute path
-            file = p(folder_path, _file)
+            file = abs_path(folder_path, _file)
             
             # If folder was found and recursive is True do THIS function again
             if recursive and os.path.isdir(file):
-                # Folder code
                 datas.extend(Data.get_data_from_folder(
                     folder_path=file,
                     mime_type_functions=mime_type_functions,
@@ -130,86 +126,163 @@ class Data:
                 ))
                 continue
             
-            # File code
             mime_type = mime.from_file(file)
-            
-            # Get func
-            func = None
-            
             # If mime_type_functions is defined and the mimetype is in it, use it`s function
             if mime_type_functions and mime_type in mime_type_functions.keys():
                 func = mime_type_functions[mime_type]
             else:
-                func = Data.get_b64_data
+                first = mime_type.split("/")[0]
+                func = getattr(Data, f"get_data_from_{first}", Data.get_data_from_text)
             
             datas.append(func(file, *args, **kwargs))
         
         return datas
 
 
-def create_frame(data: str, output_path: str = "image.png"):
-    qr = qrcode.QRCode(
-        version=1,
-        error_correction=qrcode.constants.ERROR_CORRECT_L,
-        border=0,
-        box_size=3
-    )
-    qr.add_data(data)
-    
-    img = qr.make_image()  # type: ImageFile
-    
-    img.save(output_path)
+def handle_thread(x: list):
+    Encoder.create_frame(x[0], x[1])
 
 
-def create_video(
-        data: str,
-        temp_folder: Optional[str] = None,
-        split_character: int = 2900,
-        output_video_path: Optional[str] = None,
-        video_args: Optional[dict] = None,
-        skip_temp: bool = True,
-        ffmpeg_location: str = "C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe",
-        delete_tmp: bool = True,
-        timeout: int = 500
-):
-    img: str
+class Encoder:
+    @staticmethod
+    def create_frame(
+            data: str,
+            output_path: str = "image.png"
+    ):
+        """
+        Creates a QR-Code image of the given `data` and saves it in the `output_path`.
+        
+        :param data: The data
+        :type data: str
+        
+        :param output_path: The path where the file should be saved
+        :type output_path: str
+        """
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            border=0,
+            box_size=3
+        )
+        qr.add_data(data)
+        
+        img = qr.make_image()  # type: ImageFile
+        
+        img.save(output_path)
     
-    video_args = video_args or [
-        "-framerate", "24",
-        "-b:v", "1M",
-    ]
-    temp_folder = temp_folder or tempfile.gettempdir()
-    output_video_path = output_video_path or p(os.getcwd(), "qr_data.avi")
-    prefix = "[Create Video] "
-    
-    # Setup
-    info(prefix + "Setup execution")
-    
-    if not os.path.exists(temp_folder):
-        os.mkdir(temp_folder)
-    
-    # Splitting data
-    datas = [data[i:i + split_character] for i in range(0, len(data), split_character)]
-    
-    # Skip data
-    # Will be added
-    
-    count = len(str(len(datas)))
-    # Create QR Codes
-    info(prefix + "QR-Codes get`s generated")
-    for i, single_data in enumerate(tqdm(datas, desc="Generating QR-Codes")):
-        create_frame(single_data, p(temp_folder, "image{0:0=" + str(count) + "d}.png").format(i))
-    
-    # Create Video
-    info(prefix + "Video get`s created")
-    
-    process = subprocess.Popen([
-        ffmpeg_location,
-        "-i", p(temp_folder, "image%" + str(count).zfill(2) + "d.png"),
-        *video_args,
-        output_video_path
-    ])
-    
-    if delete_tmp:
-        process.wait(timeout)
-        shutil.rmtree(temp_folder)
+    @staticmethod
+    def create_video(
+            data: str,
+            piece_size: int = 2900,
+            output_video_path: Optional[str] = None,
+            
+            temp_folder: Optional[str] = None,
+            skip_temp: bool = True,
+            delete_tmp: bool = True,
+            
+            ffmpeg_location: str = "C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe",
+            video_args: Optional[dict] = None,
+            timeout: int = 500,
+            
+            threads: Optional[int] = None
+    ):
+        """
+        Creates a video from the given `data` and saved it in the `output_video_path`.
+        The data get`s splitted into smaller pieces (define the length by setting `piece_size`).
+        The frames get`s saved in a `temp_folder` and then put together using ffmpeg. Custom args for ffmpeg can be
+        defined by defining `video_args`.
+        
+        :param data: The data
+        :type data: str
+        
+        :param piece_size: The size of the single pieces of the splitted data
+        :type piece_size: int
+        
+        :param output_video_path: The path where the video should be saved
+        :type output_video_path: str, None
+        
+        :param temp_folder: Absolute path to the temporary folder where the images should be saved. If None,
+        default value will be used. default: `tempfile.gettempdir()`
+        :type temp_folder: str, None
+        
+        :param skip_temp: If True, images found in the `temp_folder` will be skipped. While creating the single
+        images of the data, it`l be checked if the current index already exists. E.g.: Temp folder contains
+        images from number 0 to 6. So the first seven images will be skipped.
+        It won`t be checked, whether the data in the found temp is the actual data.
+        Actual unavailable
+        :type skip_temp: bool
+        
+        :param delete_tmp: Whether the `temp_folder` should be deleted after the video got created.
+        :type delete_tmp: bool
+        
+        :param ffmpeg_location: The location of ffmpeg.
+        :type ffmpeg_location: str
+        
+        :param video_args: Extra arguments for ffmpeg. If None, default value will be used. default: {
+            "-framerate", "24",
+            "-b:v", "1M",
+        }
+        :type video_args: dict, none
+        
+        :param timeout: Timeout for ffmpeg.
+        :type timeout: int
+        
+        :param threads: How many threads should be used. If None, default value will be chosen. default:
+        `os.cpu_count()`
+        :type threads: int, None
+        """
+        img: str
+        
+        video_args = video_args or [
+            "-framerate", "24",
+            "-b:v", "1M",
+        ]
+        temp_folder = temp_folder or tempfile.gettempdir()
+        output_video_path = output_video_path or p(os.getcwd(), "qr_data.avi")
+        threads = threads or os.cpu_count()
+        prefix = "[Create Video] "
+        
+        # Setup
+        info(prefix + "Setup execution")
+        
+        if not os.path.exists(temp_folder):
+            os.mkdir(temp_folder)
+        
+        # Splitting data
+        datas = [data[i:i + piece_size] for i in range(0, len(data), piece_size)]
+        
+        # Skip data
+        # Will be added
+        
+        count = len(str(len(datas)))
+        # Create QR Codes
+        info(prefix + "QR-Codes get`s generated")
+        pool_data = [
+            (single_data, abs_path(temp_folder, "image{0:0=" + str(count) + "d}.png").format(i))
+            for i, single_data in enumerate(datas)
+        ]
+        
+        with Pool(threads) as pool:
+            freeze_support()
+            list(
+                tqdm(
+                    pool.imap(handle_thread, pool_data), total=len(pool_data), desc="Generating QR-Codes"
+                )
+            )
+            
+            pool.close()
+            pool.join()
+        
+        # Create Video
+        info(prefix + "Video get`s created")
+        
+        process = subprocess.Popen([
+            ffmpeg_location,
+            "-i", abs_path(temp_folder, "image%" + str(count).zfill(2) + "d.png"),
+            *video_args,
+            output_video_path
+        ])
+        
+        if delete_tmp:
+            process.wait(timeout)
+            shutil.rmtree(temp_folder)

@@ -1,12 +1,12 @@
 import base64
 import json
-from typing import Union
+from typing import Optional, Union
 
 from constants import format
 
 
 class File:
-    def __init__(self, path: str, data: str, encoding: str):
+    def __init__(self, path: str, data: Union[str, bytes], encoding: Optional[str] = None):
         self.path = path
         self.data = data
         self.encoding = encoding
