@@ -187,9 +187,9 @@ class Encoder:
             threads: Optional[int] = None
     ):
         """
-        Creates a video from the given `data` and saved it in the `output_video_path`.
-        The data get`s splitted into smaller pieces (define the length by setting `piece_size`).
-        The frames get`s saved in a `temp_folder` and then put together using ffmpeg. Custom args for ffmpeg can be
+        Creates a video from the given `data` and saves it in the `output_video_path`.
+        The data will be splitten into smaller pieces (define the length by setting `piece_size`).
+        The frames will be saved in a `temp_folder` and then put together using ffmpeg. Custom args for ffmpeg can be
         defined by defining `video_args`.
         
         :param data: The data
@@ -206,10 +206,10 @@ class Encoder:
         :type temp_folder: str, None
         
         :param skip_temp: If True, images found in the `temp_folder` will be skipped. While creating the single
-        images of the data, it`l be checked if the current index already exists. E.g.: Temp folder contains
+        images of the data, it`ll be checked if the current index already exists. E.g.: The temp folder contains
         images from number 0 to 6. So the first seven images will be skipped.
-        It won`t be checked, whether the data in the found temp is the actual data.
-        Actual unavailable
+        It won`t be checked, whether the data in the found temp images is the actual data.
+        !Actual unavailable!
         :type skip_temp: bool
         
         :param delete_tmp: Whether the `temp_folder` should be deleted after the video got created.
